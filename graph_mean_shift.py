@@ -1,33 +1,30 @@
+import argparse
 import collections
 import itertools
-import os
 import numpy as np
-import scipy
-import torch
-import pygsp
-import networkx as nx
-from loaders import split_train_test
-from loaders import get_train_test_datasets_labels
-from loaders import get_dataset_from_datapath
-from utils import GridSearch
 from tqdm import tqdm
+import networkx as nx
+from loaders import get_train_test_datasets
+from utils import GridSearch
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Graph Mean Shift.')
-    parser.add_argument('--n_way', default=5 type=int, help='number of classes.')
+    parser.add_argument('--data_path', default='yuqing', type=str, help='backbone.')
+    parser.add_argument('--n_way', default=5, type=int, help='number of classes.')
     parser.add_argument('--n_val', default=15, type=int, help='number of validation examples.')
     parser.add_argument('--n_shot', default=5, type=int, help='number of training examples.')
-    parser.add_argument('--num_tests', default=1, type=int, help='number of tests.')
+    parser.add_argument('--num_tests', default=100, type=int, help='number of tests.')
     parser.add_argument('--avg_degree', default=20, type=int, help='number of neighbors.')
     return parser.parse_args()
 
 def get_grid_search(args):
     grid = GridSearch()
-    for arg_name, arg_value in vars(args):
-        grid.add_range(arg_name, [arg.value])
+    for arg_name, arg_value in vars(args).items():
+        grid.add_range(arg_name, [arg_value])
     grid.add_range('regular', [False])
     grid.add_range('cautious', [True])
+    grid.add_range('stop_criterion', ['critical'])
     return grid
 
 ######################################
@@ -39,7 +36,7 @@ def euclidian_similarity(x_latent, lbda):
     left = x_latent[np.newaxis,:,:]
     right = x_latent[:,np.newaxis,:]
     adj = left - right  # broadcasting
-    adj = np.inner(adj, adj) # square of l2 norm
+    adj = (adj**2).sum(axis=-1) # square of l2 norm
     adj = np.exp(-lbda * adj)
     return adj
 
@@ -69,101 +66,145 @@ def complete_missing_edges(params, neighbors, adj):
             indexes = np.argsort(adj[node])[::-1]
             for index in indexes[len(neighbors[node]):min_neighbors]:
                 neighbors[node].append(index)
-            
+
 def edges_threshold(params, adj):
     """Return a weighted adjacency list of heavier nodes"""
     indexes = np.argsort(adj, axis=None)[::-1]
-    num_nodes, num_edges = int(adj.shape[0]), int(indexes.shape[0])
+    num_nodes = int(adj.shape[0])
     max_edges = num_nodes * params.avg_degree
-    neighbors = collections.defaultdict(list)
+    neighbours = collections.defaultdict(list)
     cur_edge = 0
     for index in indexes:
         node_a, node_b = (index // num_nodes), (index % num_nodes)
-        if regular and len(neighbours[a]) >= params.avg_degree:
+        if params.regular and len(neighbours[node_a]) >= params.avg_degree:
             continue
         cur_edge += 1
         neighbours[node_a].append(node_b)
         if cur_edge >= max_edges:
-            complete_missing_edges(neighbors, adj)
+            complete_missing_edges(params, neighbours, adj)
             break
-    edges = [(i,j, adj[i,j]) for i, js in neighbors.items() for j in js]
+    edges = [(i,j, adj[i,j]) for i, js in neighbours.items() for j in js]
     return edges
 
-def assign_default_label(params, graph):
-    sentinel_label = params.n_way+1 
+def assign_default_label(graph):
     for node in graph:
-        graph.add_node(node, label=sentinel_label)
+        graph.add_node(node, label=None)
 
 def get_graph(params, x_latent):
     adj = euclidian_similarity(x_latent, lbda=10.)  # return positive edges only
     adj = transform_adjacency_matrix(params, adj)  # does nothing
-    adj_lst = edges_threshold(params, weights)  # keep heavier edges
+    adj_lst = edges_threshold(params, adj)  # keep heavier edges
     adj_lst = transform_adjacency_list(params, adj_lst)  # does nothing
     graph = nx.Graph()
     graph.add_weighted_edges_from(adj_lst)
-    assign_default_label(params, graph)
+    assign_default_label(graph)
     return graph
 
-def stop_criterion(step, graph):
-    return step+1 >= 100
+def stop_criterion(params, step, graph, com_increase_max):
+    if params.stop_criterion == 'critical':
+        max_step = graph.number_of_nodes()
+        if step >= max_step:
+            return True
+        return com_increase_max >= (params.n_shot + params.n_val)
+    if params.stop_criterion == 'fix point':
+        return False
+    raise RuntimeError
 
 def assign_supervised_labels(graph, labels, train_indexes):
     for index in train_indexes:
-        graph.add_node(index, label=None)
+        graph.add_node(index, label=labels[index])
 
 def communities_proximity(params, graph):
     scores = np.zeros(shape=(graph.number_of_nodes(), params.n_way+1))
     for node in graph:
-        for neighbor in graph.neighbors():
-            community = graph[neighbor]['label']
+        for neighbor in graph.neighbors(node):
+            community = graph.nodes[neighbor]['label']
             if community is None:
                 continue
-            weight = graph[node, neighbor]['weight']
+            weight = graph[node][neighbor]['weight']
             scores[node, community] += weight
     return scores
 
-def community_assignment(params, communities, scores, step):
-    normalizer = np.sum(weights, axis=1, keepdims=True)
-    normalizer[normalizer == 0] = 1.  # avoid division by 0
-    probs = scores / normalizer
-    decisions = np.argmax(probs, axis=1)
+def get_com_increase_max(params, step, graph, decisions):
+    if step >= graph.number_of_nodes():
+        return graph.number_of_nodes()
     smallest_com = np.min([(decisions == community).sum() for community in range(params.n_way)])
     if params.cautious:
         smallest_com = min(smallest_com, params.n_shot + step + 1)
-    for community in range(params.n_way):
-        com_indexes = decisions == community
-        com_probs = probs[com_indexes, community]
-        largest_score_indexes = np.argsort(com_probs)[:smallest_com-1:-1]  # keep the larger scores only
-        largest_score_indexes = com_indexes[largest_score_indexes]
-        for index in largest_score_indexes:
-            graph.add_node(index, label=community)  # update label
+    return smallest_com
 
-def graph_mean_shift(params, x_latent, labels, train_indexes):
+def community_assignment(params, step, graph, scores):
+    normalizer = np.sum(scores, axis=1, keepdims=True)
+    probs = scores / (normalizer + 1.*(normalizer == 0))  # avoid division by 0
+    decisions = np.argmax(probs, axis=1)
+    com_increase_max = get_com_increase_max(params, step, graph, decisions)
+    assign_default_label(graph)
+    for community in range(params.n_way):
+        com_indexes = np.nonzero(decisions == community)[0]
+        com_probs = probs[com_indexes, community]
+        score_indexes = np.argsort(com_probs)[::-1]  
+        score_indexes = score_indexes[:com_increase_max] # keep the larger scores only, hoping no zeroes
+        score_indexes = com_indexes[score_indexes]
+        for index in score_indexes:
+            graph.add_node(index, label=community)  # update label
+    return com_increase_max
+
+def check_accuracy(graph, labels, test_indexes):
+    correct = [graph.nodes[node]['label'] == labels[node] for node in test_indexes]
+    correct = np.array(correct).sum()
+    acc = correct / len(test_indexes) * 100.
+    return acc
+
+def print_decision(graph, verbose=0):
+    if not verbose:
+        return
+    for node in sorted(list(graph)):
+        print('{%d,%d}'%(node, graph.nodes[node]['label']), end=' ')
+    print('')
+
+def graph_mean_shift(params, x_latent, labels, train_indexes, test_indexes):
     x_latent = preprocessing(params, x_latent)  # project onto unit sphere
     graph = get_graph(params, x_latent)
-    for step in itertools.count(0):
+    assign_supervised_labels(graph, labels, train_indexes)
+    progress = tqdm(total=graph.number_of_nodes()+1, leave=False, desc='')
+    for step in itertools.count(0):  # infinite loop
+        scores = communities_proximity(params, graph)
+        com_increase_max = community_assignment(params, step, graph, scores)
         assign_supervised_labels(graph, labels, train_indexes)
-        communities, weights = communities_proximity(graph)
-        cautious_community_assignment(params, communities, weights)
-        if stop_criterion(step, graph):
-            assign_supervised_labels(graph, labels, train_indexes)
-            break
+        acc = check_accuracy(graph, labels, test_indexes)
+        acc_desc = 'acc=%.2f%%'%acc
+        progress.set_description(acc_desc)
+        progress.update()
+        if stop_criterion(params, step, graph, com_increase_max):
+            progress.close()
+            print_decision(graph)
+            desc = 'error=%d '%sum([(graph.nodes[node]['label'] is None) for node in graph])
+            return acc, desc+acc_desc
 
 def get_data(params):
-    data_path n_way, n_shot, n_val = params.data_path, params.n_way, params.n_shot, params.n_val
-    train_test = get_train_test_datasets(data_path, n_way, n_shot, n_val)
+    data_paths = {'vanilla':'images/latent/miniImagenet/ResNet/layer5/features.pt',
+                  'yuqing':'images/latent/miniImagenet/WideResNet28_10_S2M2_R/last/novel.plk',
+                  'cross':'images/latent/cross/WideResNet28_10_S2M2_R/last/output.plk'}
+    n_way, n_shot, n_val = params.n_way, params.n_shot, params.n_val
+    train_test = get_train_test_datasets(data_paths[params.data_path], n_way, n_shot, n_val)
     train_set, train_labels, test_set, test_labels = train_test
     x_latent = np.concatenate([train_set.numpy(), test_set.numpy()])
     labels = np.concatenate([train_labels.numpy(), test_labels.numpy()])
     train_indexes = list(range(int(train_labels.shape[0])))
-    return x_latent, labels, train_indexes
+    max_node = int(x_latent.shape[0])  # pylint: disable=E1136  # pylint/issues/3139
+    test_indexes = list(range(int(train_labels.shape[0]), max_node))
+    return x_latent, labels, train_indexes, test_indexes
 
 def compute_stats(params):
+    accs = []
+    progress = tqdm(total=params.num_tests, leave=True, desc='')
     for _ in range(params.num_tests):
         x_latent, labels, train_indexes, test_indexes = get_data(params)
-        predicted = graph_mean_shift(params, x_latent, labels, train_indexes)
-        acc = compute_accuracy(labels, predicted, test_indexes)
-        print(acc)
+        acc, desc = graph_mean_shift(params, x_latent, labels, train_indexes, test_indexes)
+        accs.append(acc)
+        avg_acc = np.mean(accs)
+        progress.set_description(desc+' acc_avg=%.2f%%'%avg_acc)
+        progress.update()
 
 if __name__ == '__main__':
     args = parse_args()
