@@ -16,6 +16,7 @@ def parse_args():
     parser.add_argument('--n_shot', default=5, type=int, help='number of training examples.')
     parser.add_argument('--num_tests', default=100, type=int, help='number of tests.')
     parser.add_argument('--avg_degree', default=20, type=int, help='number of neighbors.')
+    parser.add_argument('--sim_measure', default='euclidian', type=str, help='measure of similarity.')
     return parser.parse_args()
 
 def get_grid_search(args):
@@ -40,11 +41,25 @@ def euclidian_similarity(x_latent, lbda):
     adj = np.exp(-lbda * adj)
     return adj
 
+def cosine_similarity(x_latent):
+    adj = np.inner(x_latent, x_latent)
+    return adj
+
+def similarity_measure(params, x_latent):
+    if params.sim_measure == 'euclidian':
+        return euclidian_similarity(x_latent, lbda=10.)  # return positive edges only
+    if params.sim_measure == 'cosine':
+        return cosine_similarity(x_latent)
+    raise RuntimeError
+
 ######################################
 ########### Pre Processing ###########
 ######################################
 
 def preprocessing(params, x_latent):
+    # Magic trick 1
+    x_latent = np.power(x_latent, 0.5)
+    # Magic trick 2
     x_latent = x_latent - np.mean(x_latent, axis=0, keepdims=True)
     norm = np.linalg.norm(x_latent, axis=1, keepdims=True)
     epsilon = 1e-3
@@ -91,7 +106,7 @@ def assign_default_label(graph):
         graph.add_node(node, label=None)
 
 def get_graph(params, x_latent):
-    adj = euclidian_similarity(x_latent, lbda=10.)  # return positive edges only
+    adj = similarity_measure(params, x_latent)
     adj = transform_adjacency_matrix(params, adj)  # does nothing
     adj_lst = edges_threshold(params, adj)  # keep heavier edges
     adj_lst = transform_adjacency_list(params, adj_lst)  # does nothing
