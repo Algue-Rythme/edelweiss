@@ -4,7 +4,7 @@ import torch.nn as nn
 import numpy as np
 import pygsp
 from tqdm import tqdm
-from models import get_device
+from utils import get_device
 import scipy
 
 

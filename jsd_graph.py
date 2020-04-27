@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.optim import Adam
-from models import get_device
+from utils import get_device
 from latent_graph import PiModel
 
 class SomewhatStochasticModel(PiModel):

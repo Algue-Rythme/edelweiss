@@ -3,7 +3,7 @@ import torch
 from tqdm import trange
 import numpy as np
 from torch.optim import Adam
-from models import get_device
+from utils import get_device
 import torch.nn as nn
 
 class PiModel(nn.Module):

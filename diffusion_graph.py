@@ -4,7 +4,7 @@ import torch
 import numpy as np
 from latent_graph import embed_into_graph
 from classifiers import train_logistic_regression
-from models import get_device
+from utils import get_device
 from pygsp import graphs, filters, learning
 
 
