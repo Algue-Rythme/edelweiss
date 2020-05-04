@@ -3,6 +3,7 @@ import collections
 import itertools
 import numpy as np
 import numba
+from sklearn.neighbors import NearestNeighbors
 from tqdm import tqdm
 import networkx as nx
 from loaders import get_train_test_datasets
@@ -28,14 +29,14 @@ def get_grid_search(args):
     grid.add_range('mean', [True])
     grid.add_range('norm', [True])
     # Algorithm
-    grid.add_range('momentum', [0., 0.5, 0.9, 0.95, 0.99])
+    grid.add_range('momentum', [0., 0.9, 0.95, 0.99])
     grid.add_range('stop_criterion', ['fixpoint'])
     grid.add_range('cautious', [True])
     # Similarity
-    grid.add_range('lbda', [10.])
+    grid.add_range('lbda', [1.])
     grid.add_range('cube', [False])
     # Graph iterations
-    grid.add_range('regular', [False])
+    grid.add_range('regular', [True])
     grid.add_range('kappa', [1.])
     grid.add_range('alpha', [0.])
     grid.add_range('bethoyd', [False])  # similarity path
@@ -180,38 +181,43 @@ def graph_to_adjacency(graph):
             adj_lst[node].append((neighbor, graph[node][neighbor]['weight']))
     return adj_lst
 
-def get_graph(params, x_latent):
+def get_orphans(graph, train_indexes):
+    components = nx.connected_components(graph)
+    comps = [set(map(int, component)) for component in components]
+    train_indexes = set(train_indexes)
+    orphans = [list(comp) for comp in comps if not comp & train_indexes]
+    return orphans
+
+def get_graph(params, x_latent, train_indexes):
     adj = similarity_measure(params, x_latent)
     adj = transform_adjacency_matrix(params, adj)
     edges_lst = edges_threshold(params, adj)  # keep heavier edges
     graph = nx.Graph()
     graph.add_weighted_edges_from(edges_lst)
+    orphans = get_orphans(graph, train_indexes)
     adj_lst = graph_to_adjacency(graph)
     probs = create_default_labels(int(x_latent.shape[0]), params.n_way)
-    return adj_lst, probs
+    return adj_lst, probs, orphans
 
 
 ######################################
 ################ Misc ################
 ######################################
 
-@numba.jit(nopython=True)
-def stable_matching(probs):
-    num_nodes, num_coms = int(probs.shape[0]), int(probs.shape[1])
-    com_size = num_nodes // num_coms
-    taken = np.full(num_nodes, False)
-    for com in range(num_coms):
-        size = 0
-        indexes = np.argsort(probs[:,com])[::-1]
-        probs[:,com] = 0.
-        for index in range(num_nodes):
-            node = indexes[index]
-            if not taken[node]:
-                taken[node] = True
-                probs[node,com] = 1.
-                size += 1
-                if size >= com_size:
-                    break
+def check_accuracy(probs, labels, test_indexes):
+    prediction = np.argmax(probs[test_indexes], axis=1)
+    correct = prediction == labels[test_indexes]
+    correct = np.array(correct).sum()
+    acc = correct / len(test_indexes) * 100.
+    return acc
+
+def print_decision(probs, verbose):
+    if not verbose:
+        return
+    prediction = np.argmax(probs, axis=1)
+    for node in range(prediction.shape[0]):
+        print('{%d,%d}'%(node, prediction[node]), end=' ')
+    print('')
 
 ######################################
 ########### Graph Mean Shift #########
@@ -249,6 +255,24 @@ def get_com_increase_max(params, step, probs, decisions):
         com_increase_max = min(com_increase_max, params.n_shot + step + 1)
     return com_increase_max
 
+@numba.jit(nopython=True)
+def stable_matching(probs):
+    num_nodes, num_coms = int(probs.shape[0]), int(probs.shape[1])
+    com_size = num_nodes // num_coms
+    taken = np.full(num_nodes, False)
+    for com in range(num_coms):
+        size = 0
+        indexes = np.argsort(probs[:,com])[::-1]
+        probs[:,com] = 0.
+        for index in range(num_nodes):
+            node = indexes[index]
+            if not taken[node]:
+                taken[node] = True
+                probs[node,com] = 1.
+                size += 1
+                if size >= com_size:
+                    break
+
 def take_decision(transfer_prob):
     transfer_cpy = np.array(transfer_prob)
     stable_matching(transfer_cpy)
@@ -272,26 +296,26 @@ def community_assignment(params, step, probs, scores):
             probs[index, community] += b  # decision
     return com_increase_max
 
-def check_accuracy(probs, labels, test_indexes):
-    prediction = np.argmax(probs[test_indexes], axis=1)
-    correct = prediction == labels[test_indexes]
-    correct = np.array(correct).sum()
-    acc = correct / len(test_indexes) * 100.
-    return acc
-
-def print_decision(probs, verbose):
-    if not verbose:
+def assign_orphans(x_latent, probs, orphans):
+    if not orphans:
         return
-    prediction = np.argmax(probs, axis=1)
-    for node in range(prediction.shape[0]):
-        print('{%d,%d}'%(node, prediction[node]), end=' ')
-    print('')
+    orphans = [node for nodes in orphans for node in nodes]
+    assigned = list(set(range(x_latent.shape[0])).difference(set(orphans)))
+    x_train = x_latent[assigned,:]
+    prediction = np.argmax(probs[assigned,:], axis=1)
+    nn_train = np.zeros(shape=(probs.shape[1], x_latent.shape[1]))
+    for com in range(int(probs.shape[1])):
+        nn_train[com] = np.mean(x_train[prediction == com,:])
+    x_test = x_latent[orphans,:]
+    knn = NearestNeighbors(n_neighbors=1, algorithm='ball_tree').fit(nn_train)
+    _, indices = knn.kneighbors(x_test)
+    probs[orphans,:] = probs[indices[:,0],:]
 
 def graph_mean_shift(params, x_latent, labels, train_indexes, test_indexes):
     x_latent = preprocessing(params, x_latent)  # project onto unit sphere
-    adj_lst, probs = get_graph(params, x_latent)
+    adj_lst, probs, orphans = get_graph(params, x_latent, train_indexes)
     assign_supervised_labels(probs, labels, train_indexes)
-    max_step = int(probs.shape[0] * 2.) # (0.1 + 1./(1. - params.momentum)))
+    max_step = int(probs.shape[0] * 2.)
     progress = tqdm(total=max_step, leave=False, desc='')
     for step in itertools.count(0):  # infinite loop
         scores = communities_proximity(params, adj_lst, probs)
@@ -301,6 +325,7 @@ def graph_mean_shift(params, x_latent, labels, train_indexes, test_indexes):
         if criterion:
             stable_matching(probs)
             assign_supervised_labels(probs, labels, train_indexes)
+            assign_orphans(x_latent, probs, orphans)
         acc = check_accuracy(probs, labels, test_indexes)
         acc_desc = 'acc=%.2f%%'%acc
         progress.set_description(acc_desc)
