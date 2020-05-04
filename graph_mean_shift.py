@@ -2,6 +2,7 @@ import argparse
 import collections
 import itertools
 import numpy as np
+import numba
 from tqdm import tqdm
 import networkx as nx
 from loaders import get_train_test_datasets
@@ -23,9 +24,25 @@ def get_grid_search(args):
     grid = GridSearch()
     for arg_name, arg_value in vars(args).items():
         grid.add_range(arg_name, [arg_value])
-    grid.add_range('regular', [False])
+    # Preprocessing
+    grid.add_range('mean', [True])
+    grid.add_range('norm', [True])
+    # Algorithm
+    grid.add_range('momentum', [0., 0.5, 0.9, 0.95, 0.99])
+    grid.add_range('stop_criterion', ['fixpoint'])
     grid.add_range('cautious', [True])
-    grid.add_range('stop_criterion', ['critical'])
+    # Similarity
+    grid.add_range('lbda', [10.])
+    grid.add_range('cube', [False])
+    # Graph iterations
+    grid.add_range('regular', [False])
+    grid.add_range('kappa', [1.])
+    grid.add_range('alpha', [0.])
+    grid.add_range('bethoyd', [False])  # similarity path
+    grid.add_range('bepon', [False])  # does not work
+    grid.add_range('gripoyd', [False])  # conductance
+    # Misc
+    grid.add_range('verbose', [False])
     return grid
 
 ######################################
@@ -33,23 +50,26 @@ def get_grid_search(args):
 ######################################
 
 
-def euclidian_similarity(x_latent, lbda):
+def euclidian_similarity(params, x_latent):
     left = x_latent[np.newaxis,:,:]
     right = x_latent[:,np.newaxis,:]
     adj = left - right  # broadcasting
     adj = (adj**2).sum(axis=-1) # square of l2 norm
-    adj = np.exp(-lbda * adj)
+    adj = np.exp(-params.lbda * adj)
     return adj
 
-def cosine_similarity(x_latent):
+def cosine_similarity(params, x_latent):
     adj = np.inner(x_latent, x_latent)
+    adj = np.maximum(adj, 0.)  # remove negative entries
+    if params.cube:
+        adj = adj ** 3.
     return adj
 
-def similarity_measure(params, x_latent):
+def similarity_measure(params, x_latent):  # return positive edges only
     if params.sim_measure == 'euclidian':
-        return euclidian_similarity(x_latent, lbda=10.)  # return positive edges only
+        return euclidian_similarity(params, x_latent)
     if params.sim_measure == 'cosine':
-        return cosine_similarity(x_latent)
+        return cosine_similarity(params, x_latent)
     raise RuntimeError
 
 ######################################
@@ -57,20 +77,67 @@ def similarity_measure(params, x_latent):
 ######################################
 
 def preprocessing(params, x_latent):
-    # Magic trick 1
-    x_latent = np.power(x_latent, 0.5)
-    # Magic trick 2
-    x_latent = x_latent - np.mean(x_latent, axis=0, keepdims=True)
-    norm = np.linalg.norm(x_latent, axis=1, keepdims=True)
-    epsilon = 1e-3
-    x_latent = x_latent / np.maximum(norm, epsilon)
+    if params.mean:
+        x_latent = x_latent - np.mean(x_latent, axis=0, keepdims=True)
+    if params.norm:
+        norm = np.linalg.norm(x_latent, axis=1, keepdims=True)
+        epsilon = 1e-3
+        x_latent = x_latent / np.maximum(norm, epsilon)
     return x_latent
 
-def transform_adjacency_matrix(params, adj):
-    return adj
+@numba.jit(nopython=True, parallel=True)
+def bethoyd_griwall(adj):
+    num_nodes = adj.shape[0]
+    for k in range(num_nodes):
+        for i in numba.prange(num_nodes): #  pylint: disable=not-an-iterable
+            for j in range(num_nodes):
+                bridge = adj[i,k]*adj[k,j]
+                adj[i,j] = max(adj[i,j], bridge)  # keep the path with better product
 
-def transform_adjacency_list(params, adj_lst):
-    return adj_lst
+@numba.jit(nopython=True, parallel=True)
+def bepon_warshoyd(adj):
+    num_nodes = adj.shape[0]
+    for k in range(num_nodes):
+        for i in numba.prange(num_nodes): #  pylint: disable=not-an-iterable
+            for j in range(num_nodes):
+                bridge = min(adj[i,k], adj[k,j])
+                adj[i,j] = max(adj[i,j], bridge)  # keep the path with the larger smallest edge
+
+@numba.jit(nopython=True, parallel=True)
+def inv_adj(matrix):
+    n = matrix.shape[0]
+    infty = float(1e6)
+    for i in numba.prange(n): #  pylint: disable=not-an-iterable
+        for j in range(n):
+            if matrix[i,j] == 0.:
+                matrix[i,j] = infty
+            elif matrix[i,j] >= infty:
+                matrix[i,j] = 0.
+            else:
+                matrix[i,j] = 1. / matrix[i,j]
+
+@numba.jit(nopython=True, parallel=True)
+def gripoyd_bethall(adj):
+    inv_adj(adj)
+    num_nodes = adj.shape[0]
+    for k in range(num_nodes):
+        for i in numba.prange(num_nodes): #  pylint: disable=not-an-iterable
+            for j in range(num_nodes):
+                bridge = adj[i,k] + adj[k,j]
+                adj[i,j] = min(adj[i,j], bridge)  # keep the path with maximal conductance
+    inv_adj(adj)
+
+def transform_adjacency_matrix(params, adj):
+    if params.sim_measure == 'euclidian':
+        adj = adj + params.alpha*np.eye(N=adj.shape[0])
+        adj = adj ** params.kappa
+    if params.bethoyd:
+        bethoyd_griwall(adj)
+    if params.gripoyd:
+        gripoyd_bethall(adj)
+    if params.bepon:
+        bepon_warshoyd(adj)
+    return adj
 
 def complete_missing_edges(params, neighbors, adj):
     """complete adjacency list to avoid generate graphs"""
@@ -83,7 +150,7 @@ def complete_missing_edges(params, neighbors, adj):
                 neighbors[node].append(index)
 
 def edges_threshold(params, adj):
-    """Return a weighted adjacency list of heavier nodes"""
+    """Return a weighted adjacency list of heavier edges"""
     indexes = np.argsort(adj, axis=None)[::-1]
     num_nodes = int(adj.shape[0])
     max_edges = num_nodes * params.avg_degree
@@ -93,108 +160,155 @@ def edges_threshold(params, adj):
         node_a, node_b = (index // num_nodes), (index % num_nodes)
         if params.regular and len(neighbours[node_a]) >= params.avg_degree:
             continue
-        cur_edge += 1
-        neighbours[node_a].append(node_b)
-        if cur_edge >= max_edges:
+        if adj[node_a, node_b] > 0.:
+            cur_edge += 1
+            neighbours[node_a].append(node_b)
+        if cur_edge >= max_edges or adj[node_a, node_b] <= 0.:
             complete_missing_edges(params, neighbours, adj)
             break
     edges = [(i,j, adj[i,j]) for i, js in neighbours.items() for j in js]
     return edges
 
-def assign_default_label(graph):
+def create_default_labels(num_nodes, n_way):
+    probs = np.full(shape=(num_nodes, n_way), fill_value=1./n_way)
+    return probs
+
+def graph_to_adjacency(graph):
+    adj_lst = [[] for _ in range(graph.number_of_nodes())]
     for node in graph:
-        graph.add_node(node, label=None)
+        for neighbor in graph.neighbors(node):
+            adj_lst[node].append((neighbor, graph[node][neighbor]['weight']))
+    return adj_lst
 
 def get_graph(params, x_latent):
     adj = similarity_measure(params, x_latent)
-    adj = transform_adjacency_matrix(params, adj)  # does nothing
-    adj_lst = edges_threshold(params, adj)  # keep heavier edges
-    adj_lst = transform_adjacency_list(params, adj_lst)  # does nothing
+    adj = transform_adjacency_matrix(params, adj)
+    edges_lst = edges_threshold(params, adj)  # keep heavier edges
     graph = nx.Graph()
-    graph.add_weighted_edges_from(adj_lst)
-    assign_default_label(graph)
-    return graph
+    graph.add_weighted_edges_from(edges_lst)
+    adj_lst = graph_to_adjacency(graph)
+    probs = create_default_labels(int(x_latent.shape[0]), params.n_way)
+    return adj_lst, probs
 
-def stop_criterion(params, step, graph, com_increase_max):
+
+######################################
+################ Misc ################
+######################################
+
+@numba.jit(nopython=True)
+def stable_matching(probs):
+    num_nodes, num_coms = int(probs.shape[0]), int(probs.shape[1])
+    com_size = num_nodes // num_coms
+    taken = np.full(num_nodes, False)
+    for com in range(num_coms):
+        size = 0
+        indexes = np.argsort(probs[:,com])[::-1]
+        probs[:,com] = 0.
+        for index in range(num_nodes):
+            node = indexes[index]
+            if not taken[node]:
+                taken[node] = True
+                probs[node,com] = 1.
+                size += 1
+                if size >= com_size:
+                    break
+
+######################################
+########### Graph Mean Shift #########
+######################################
+
+def stop_criterion(params, step, probs, com_increase_max, max_step):
+    if step >= max_step:
+        return True
     if params.stop_criterion == 'critical':
-        max_step = graph.number_of_nodes()
-        if step >= max_step:
-            return True
         return com_increase_max >= (params.n_shot + params.n_val)
-    if params.stop_criterion == 'fix point':
+    if params.stop_criterion == 'fixpoint':
         return False
     raise RuntimeError
 
-def assign_supervised_labels(graph, labels, train_indexes):
+def assign_supervised_labels(probs, labels, train_indexes):
     for index in train_indexes:
-        graph.add_node(index, label=labels[index])
+        label = labels[index]
+        probs[index,:] = 0.
+        probs[index,label] = 1.
 
-def communities_proximity(params, graph):
-    scores = np.zeros(shape=(graph.number_of_nodes(), params.n_way+1))
-    for node in graph:
-        for neighbor in graph.neighbors(node):
-            community = graph.nodes[neighbor]['label']
-            if community is None:
-                continue
-            weight = graph[node][neighbor]['weight']
-            scores[node, community] += weight
+def communities_proximity(params, adj_lst, probs):
+    scores = np.zeros(shape=(len(adj_lst), params.n_way))
+    for node, neighbors in enumerate(adj_lst): #  pylint: disable=not-an-iterable
+        for neighbor, edge_weight in neighbors:
+            for community in range(params.n_way):
+                weight = edge_weight * probs[neighbor, community]
+                scores[node, community] += weight  # threshold
     return scores
 
-def get_com_increase_max(params, step, graph, decisions):
-    if step >= graph.number_of_nodes():
-        return graph.number_of_nodes()
-    smallest_com = np.min([(decisions == community).sum() for community in range(params.n_way)])
+def get_com_increase_max(params, step, probs, decisions):
+    com_increase_max = params.n_shot + params.n_val
+    if step >= int(probs.shape[0]):
+        return com_increase_max
     if params.cautious:
-        smallest_com = min(smallest_com, params.n_shot + step + 1)
-    return smallest_com
+        com_increase_max = min(com_increase_max, params.n_shot + step + 1)
+    return com_increase_max
 
-def community_assignment(params, step, graph, scores):
+def take_decision(transfer_prob):
+    transfer_cpy = np.array(transfer_prob)
+    stable_matching(transfer_cpy)
+    decision = np.argmax(transfer_cpy, axis=1)
+    return decision
+
+def community_assignment(params, step, probs, scores):
     normalizer = np.sum(scores, axis=1, keepdims=True)
-    probs = scores / (normalizer + 1.*(normalizer == 0))  # avoid division by 0
-    decisions = np.argmax(probs, axis=1)
-    com_increase_max = get_com_increase_max(params, step, graph, decisions)
-    assign_default_label(graph)
+    transfer_prob = scores / (normalizer + 1.*(normalizer == 0))  # avoid division by 0
+    decisions = take_decision(transfer_prob)  # non linearity, balanced by default
+    com_increase_max = get_com_increase_max(params, step, probs, decisions)
     for community in range(params.n_way):
         com_indexes = np.nonzero(decisions == community)[0]
-        com_probs = probs[com_indexes, community]
+        com_probs = transfer_prob[com_indexes, community]
         score_indexes = np.argsort(com_probs)[::-1]  
         score_indexes = score_indexes[:com_increase_max] # keep the larger scores only, hoping no zeroes
         score_indexes = com_indexes[score_indexes]
         for index in score_indexes:
-            graph.add_node(index, label=community)  # update label
+            a, b = params.momentum, 1. - params.momentum
+            probs[index,:] *= a  # inertia :( :( :(
+            probs[index, community] += b  # decision
     return com_increase_max
 
-def check_accuracy(graph, labels, test_indexes):
-    correct = [graph.nodes[node]['label'] == labels[node] for node in test_indexes]
+def check_accuracy(probs, labels, test_indexes):
+    prediction = np.argmax(probs[test_indexes], axis=1)
+    correct = prediction == labels[test_indexes]
     correct = np.array(correct).sum()
     acc = correct / len(test_indexes) * 100.
     return acc
 
-def print_decision(graph, verbose=0):
+def print_decision(probs, verbose):
     if not verbose:
         return
-    for node in sorted(list(graph)):
-        print('{%d,%d}'%(node, graph.nodes[node]['label']), end=' ')
+    prediction = np.argmax(probs, axis=1)
+    for node in range(prediction.shape[0]):
+        print('{%d,%d}'%(node, prediction[node]), end=' ')
     print('')
 
 def graph_mean_shift(params, x_latent, labels, train_indexes, test_indexes):
     x_latent = preprocessing(params, x_latent)  # project onto unit sphere
-    graph = get_graph(params, x_latent)
-    assign_supervised_labels(graph, labels, train_indexes)
-    progress = tqdm(total=graph.number_of_nodes()+1, leave=False, desc='')
+    adj_lst, probs = get_graph(params, x_latent)
+    assign_supervised_labels(probs, labels, train_indexes)
+    max_step = int(probs.shape[0] * 2.) # (0.1 + 1./(1. - params.momentum)))
+    progress = tqdm(total=max_step, leave=False, desc='')
     for step in itertools.count(0):  # infinite loop
-        scores = communities_proximity(params, graph)
-        com_increase_max = community_assignment(params, step, graph, scores)
-        assign_supervised_labels(graph, labels, train_indexes)
-        acc = check_accuracy(graph, labels, test_indexes)
+        scores = communities_proximity(params, adj_lst, probs)
+        com_increase_max = community_assignment(params, step, probs, scores)
+        assign_supervised_labels(probs, labels, train_indexes)
+        criterion = stop_criterion(params, step, probs, com_increase_max, max_step)
+        if criterion:
+            stable_matching(probs)
+            assign_supervised_labels(probs, labels, train_indexes)
+        acc = check_accuracy(probs, labels, test_indexes)
         acc_desc = 'acc=%.2f%%'%acc
         progress.set_description(acc_desc)
         progress.update()
-        if stop_criterion(params, step, graph, com_increase_max):
+        if criterion:
             progress.close()
-            print_decision(graph)
-            desc = 'error=%d '%sum([(graph.nodes[node]['label'] is None) for node in graph])
-            return acc, desc+acc_desc
+            print_decision(probs, params.verbose)
+            return acc, acc_desc
 
 def get_data(params):
     data_paths = {'vanilla':'images/latent/miniImagenet/ResNet/layer5/features.pt',
@@ -220,9 +334,13 @@ def compute_stats(params):
         avg_acc = np.mean(accs)
         progress.set_description(desc+' acc_avg=%.2f%%'%avg_acc)
         progress.update()
+    progress.close()
+    print('')
 
 if __name__ == '__main__':
     args = parse_args()
     grid_search = get_grid_search(args)
+    print(grid_search.get_constant_keys())
     for params in grid_search.get_params():
+        print(grid_search.get_variable_keys(params))
         compute_stats(params)
