@@ -41,9 +41,9 @@ def get_grid_search_params(training_type, mode, yuqing_version, classifier, n_wa
         # grid.add_range('intersection_measure', ['minimum_cut'])
         # grid.add_range('intersection_measure', ['stoer_wagner'])
         # grid.add_range('intersection_measure', ['kernighan']) 
-        grid.add_range('intersection_measure', ['louvain_dendrogram'])
+        # grid.add_range('intersection_measure', ['louvain_dendrogram'])
         # grid.add_range('intersection_measure', ['baseline'])
-        # grid.add_range('intersection_measure', ['arena'])
+        grid.add_range('intersection_measure', ['arena'])
         grid.add_range('communities', ['entropy'])  # 'pure'
         grid.add_range('worse_only', [False])
         grid.add_range('crop', [False])  # 'pure'
@@ -56,14 +56,17 @@ def get_grid_search_params(training_type, mode, yuqing_version, classifier, n_wa
         grid.add_range('latent_normalization', ['l1'])
     elif 'yuqing' in mode:
         grid.add_range('latent_normalization', ['l2'])
+    else:
+        grid.add_range('latent_normalization', ['l2'])
     grid.add_range('classifier', [classifier])  # ['logistic_regression', 'ncm']
     grid.add_range('compute_corr', [True])
     grid.add_range('plot', [False])
-    grid.add_range('progressive_plot', [False])  
+    grid.add_range('progressive_plot', [False])
     return grid
 
 def parse_args(modes):
     parser = argparse.ArgumentParser(description='Graph Smoothness.')
+    parser.add_argument('--dataset', default='yuqing', help='Dataset key.')
     parser.add_argument('--mode', default='monitoring_volume', help='Mode of regularization. Can be %s'%modes)
     parser.add_argument('--yuqing_version', default='vanilla', help='Way to propagate features.')
     parser.add_argument('--classifier', default='logistic_regression', help='How to classify examples.')

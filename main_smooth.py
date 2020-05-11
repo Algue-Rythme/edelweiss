@@ -200,8 +200,10 @@ if __name__ == '__main__':
     n_dataset = get_num_tests(args.training_type)
     data_paths = {'vanilla':'images/latent/miniImagenet/ResNet/layer5/features.pt',
                   'yuqing':'images/latent/miniImagenet/WideResNet28_10_S2M2_R/last/novel.plk',
-                  'cross':'images/latent/cross/WideResNet28_10_S2M2_R/last/output.plk'}
-    data_path = data_paths['yuqing']
+                  'cross':'images/latent/cross/WideResNet28_10_S2M2_R/last/output.plk',
+                  'default_edge':'../Potion/images/miniImagenet/WideResNet28_10/default/400/novel.plk',
+                  'base':'images/latent/miniImagenet/WideResNet28_10_S2M2_R/last/base.plk'}
+    data_path = data_paths[args.dataset]
     n_way = args.n_way
     n_val = args.n_val
     n_shot = args.n_shot

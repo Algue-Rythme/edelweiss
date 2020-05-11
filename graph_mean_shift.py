@@ -338,7 +338,8 @@ def graph_mean_shift(params, x_latent, labels, train_indexes, test_indexes):
 def get_data(params):
     data_paths = {'vanilla':'images/latent/miniImagenet/ResNet/layer5/features.pt',
                   'yuqing':'images/latent/miniImagenet/WideResNet28_10_S2M2_R/last/novel.plk',
-                  'cross':'images/latent/cross/WideResNet28_10_S2M2_R/last/output.plk'}
+                  'cross':'images/latent/cross/WideResNet28_10_S2M2_R/last/output.plk',
+                  'default_edge':'../Potion/images/miniImagenet/WideResNet28_10/default/400/novel.plk'}
     n_way, n_shot, n_val = params.n_way, params.n_shot, params.n_val
     train_test = get_train_test_datasets(data_paths[params.data_path], n_way, n_shot, n_val)
     train_set, train_labels, test_set, test_labels = train_test
