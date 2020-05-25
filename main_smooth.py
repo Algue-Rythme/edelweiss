@@ -202,8 +202,12 @@ if __name__ == '__main__':
                   'yuqing':'images/latent/miniImagenet/WideResNet28_10_S2M2_R/last/novel.plk',
                   'cross':'images/latent/cross/WideResNet28_10_S2M2_R/last/output.plk',
                   'default_edge':'../Potion/images/miniImagenet/WideResNet28_10/default/400/novel.plk',
+                  'triplet_rotation_local_mixup_features':'../Potion/images/miniImagenet/WideResNet28_10/triplet_rotation_local_mixup/151/novel_features.plk',
+                  'triplet_rotation_local_mixup_penultimate':'../Potion/images/miniImagenet/WideResNet28_10/triplet_rotation_local_mixup/151/novel_penultimate.plk',
+                  'default_features':'../Potion/images/miniImagenet/WideResNet28_10/default/181/novel_features.plk',
+                  'default_penultimate':'../Potion/images/miniImagenet/WideResNet28_10/default/181/novel_penultimate.plk',
                   'base':'images/latent/miniImagenet/WideResNet28_10_S2M2_R/last/base.plk'}
-    data_path = data_paths[args.dataset]
+    data_path = '&'.join([data_paths[path] for path in args.dataset.split('&')])
     n_way = args.n_way
     n_val = args.n_val
     n_shot = args.n_shot
@@ -211,7 +215,7 @@ if __name__ == '__main__':
     print('mode=%s yuqing_version=%s classifier=%s n_way=%d n_val=%d n_shot=%d datapath=%s'%to_print)
     if args.mode in modes:
         grid_search_params = get_grid_search_params(args.training_type, args.mode, args.yuqing_version,
-                                                    args.classifier, n_way, n_val, n_shot)
+                                                    args.classifier, n_way, n_val, n_shot, args.dataset)
         correlation_grid_search(n_dataset, data_path, grid_search_params)
     else:
         print('Bad experience name')

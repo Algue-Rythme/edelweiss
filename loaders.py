@@ -62,14 +62,20 @@ def load_pickle(file):
 
 @functools.lru_cache()
 def get_dataset_from_datapath(data_path):
-    if data_path.endswith('.plk'):
-        dataset = load_pickle(data_path)
-    elif data_path.endswith('.pt'):
-        dataset = torch.load(data_path)
-    else:
-        assert False
-    original_data = dataset['data']
-    original_labels = dataset['labels']
+    original_data = []
+    original_labels = []
+    paths = data_path.split('&')
+    for path in paths:
+        if data_path.endswith('.plk'):
+            dataset = load_pickle(path)
+        elif data_path.endswith('.pt'):
+            dataset = torch.load(path)
+        else:
+            assert False
+        original_data.append(dataset['data'])
+        original_labels.append(dataset['labels'])
+    original_data = torch.cat(original_data)
+    original_labels = torch.cat(original_labels)
     return original_data, original_labels
 
 def get_train_test_datasets(data_path, n_way, n_shot, n_val):
@@ -86,14 +92,21 @@ def get_train_test_datasets_labels(data_path, n_way, n_shot, n_val, ways=None):
     data, labels = data_subset(original_data, original_labels, n_way, ways=ways)
     return split_train_test(data, labels, n_shot, n_val), selected_labels
 
-def get_all_pairs_datasets(data_path, n_way, crop):
+def get_all_pairs_datasets(data_path, n_way, crop, parts=None):
     assert n_way == 2
     original_data, original_labels = get_dataset_from_datapath(data_path)
     num_labels, n_sample_per_label = get_labels_stats(original_labels)
-    for i in range(num_labels):
+    if parts is None:
+        start_i = 0
+        yield int(num_labels) * int(num_labels-1) // 2
+    else:
+        start_i = parts
+        yield parts * (num_labels - parts)
+    for i in range(start_i, num_labels):
         if crop and i == 5:
             break
-        for j in range(i):
+        end_j = parts if parts is not None else i
+        for j in range(0, end_j):
             ways = np.array([i, j])
             label_a = int(original_labels[i*n_sample_per_label])
             label_b = int(original_labels[j*n_sample_per_label])

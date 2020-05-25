@@ -40,7 +40,9 @@ def laplacian_from_weights(weights):
     D = get_degree(weights)
     return D - weights
 
-def edges_from_loss_fn(z_latent, loss_fn, num_neighbors, regular, normalize_weights=False, substract_mean=False):
+def edges_from_loss_fn(z_latent, loss_fn, num_neighbors, regular, normalize_weights=False, substract_mean=False, exponent=False):
+    if exponent:
+        z_latent = torch.sqrt(z_latent)
     if substract_mean:
         z_latent = z_latent - torch.mean(z_latent, dim=0, keepdim=True)
     if normalize_weights:
@@ -57,7 +59,7 @@ def weights_from_loss_fn(z_latent, loss_fn, num_neighbors, regular, undirected, 
     weights = np.zeros(shape=(num_nodes, num_nodes), dtype=np.float32)
     for loss, (a, b) in edge_loss_pairs:
         weights[a, b] = loss
-    weights = torch.tensor(weights)
+    weights = torch.FloatTensor(weights)
     if undirected:
         weights = 0.5*weights + 0.5*torch.t(weights)  # symmetrize
     return weights

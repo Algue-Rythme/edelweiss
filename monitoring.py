@@ -75,8 +75,6 @@ def compute_pure(nodes, colors, labels):
     num_splitted = sum([1 for colors in labels_to_colors.values() if len(colors) > 1])
     num_good = len(colors_to_labels) - num_confusion
     ratio = num_good / (num_good + num_confusion) * 100.
-    if print_details:
-        print('\n', level+1, '\t'*2, num_confusion, '\t'*3, num_splitted, '\t'*2, num_good, '\t'*1, '%.2f%%'%ratio)
     return ratio / 100.
 
 def get_total(bag):
@@ -141,14 +139,17 @@ def louvain_dendrogram(recorder, graph, labels, params, print_details=False):
         if params.communities == 'pure':
             info = compute_pure(graph.nodes, colors, labels)
         elif params.communities == 'entropy':
-            info = compute_communities_entropy(graph.nodes, colors, labels)
+            info = compute_communities_entropy(graph.nodes, colors, labels, verbose=False)
         infos.append(info)
     return infos
 
 def build_community_graph(params, examples, labels, print_graph=False):
     num_neighbors, regular = params.num_neighbors, params.regular
     edges = edges_from_loss_fn(examples, cosine_loss, num_neighbors=num_neighbors,
-                               regular=regular, normalize_weights=True, substract_mean=True)
+                               regular=regular,
+                               normalize_weights=True,
+                               substract_mean=True,
+                               exponent=True)
     if params.higher_order:
         num_nodes = len(set([int(edge[1][0]) for edge in edges]))
         adj = np.zeros(shape=(num_nodes, num_nodes))
@@ -190,12 +191,16 @@ def infos_per_level(graph, labels, params, verbose=True):
         infos.append(info)
     return infos
 
-def get_draw_options(big_graph):
+def get_draw_options(big_graph, bipartite):
     w_max = float(np.max([w[2] for w in big_graph.edges.data('weight')]))
     colors = [w[2]/w_max for w in big_graph.edges.data('weight')]
     edge_labels = {w[:2]:('%.3f'%w[2]) for w in  big_graph.edges.data('weight')}
+    if bipartite is None:
+        node_color = '#A0CBE2'
+    else:
+        node_color = ['#1A4081' if node < bipartite else '#E37373' for node in big_graph]
     return {
-        "node_color": "#A0CBE2",
+        "node_color": node_color,
         "edge_color": colors,
         "width": 4,
         "edge_cmap": plt.cm.Reds,
@@ -203,23 +208,29 @@ def get_draw_options(big_graph):
     }, edge_labels
 
 def print_big_graph(params, mean_pos, edges, avg_degree=3, tsne_pos=False):
+    bipartite = 64 if '&' in params.dataset else None
     edges.sort(key=lambda t: t[2], reverse=True)
     max_edges = int(len(mean_pos) * avg_degree)
     edges = edges[:max_edges]
     big_graph = nx.Graph()
     big_graph.add_weighted_edges_from(edges)
-    options, edge_labels = get_draw_options(big_graph)
+    options, edge_labels = get_draw_options(big_graph, bipartite)
     if tsne_pos:
         mean_pos_array = np.concatenate(list(mean_pos.values()), axis=0)
         tsne = manifold.TSNE()
         print(mean_pos_array)
         mean_pos_array = tsne.fit_transform(mean_pos_array)
+        pos = dict()
         for i, key in enumerate(mean_pos):
             pos[key] = mean_pos_array[i]
+    elif bipartite is not None:
+        part_1 = [node for node in big_graph if node < bipartite]
+        pos = nx.drawing.layout.bipartite_layout(big_graph, part_1, align='horizontal')
     else:
-        pos = nx.spring_layout(big_graph)
-        # pos = nx.spectral_layout(big_graph)
-    nx.draw(big_graph, pos=pos, **options)
+        # pos = nx.spring_layout(big_graph)
+        pos = nx.spectral_layout(big_graph)
+    nx.draw_networkx_nodes(big_graph, pos=pos, **options)
+    nx.draw_networkx_labels(big_graph, pos, labels={node:str(node) for node in big_graph})
     nx.draw_networkx_edge_labels(big_graph, edge_labels=edge_labels, pos=pos, font_size=8)
     name = params.intersection_measure + '_communities_' + str(-params.ladder) + '_' + str(params.num_neighbors)
     nx.drawing.nx_agraph.write_dot(big_graph, os.path.join('graphs', name+'.dot'))
@@ -234,10 +245,12 @@ def add_class(mean_pos, label, false_label, examples, labels):
     class_examples = examples[labels == false_label]
     mean_pos[label] = torch.mean(class_examples, dim=0, keepdim=True).numpy()
 
-def monitore_communities(data_path, params, num_repetitions=20):
-    all_pairs = get_all_pairs_datasets(data_path, params.n_way, params.crop)
+def monitore_communities(data_path, params, num_repetitions=5):
+    all_pairs = get_all_pairs_datasets(data_path, params.n_way, params.crop, params.parts)
     edges = []
     mean_pos = dict()
+    total_pairs = next(all_pairs)
+    progress = tqdm(total=total_pairs, leave=True)
     for (examples, labels, label_a, label_b, false_a, false_b) in all_pairs:
         add_class(mean_pos, label_a, false_a, examples, labels)
         add_class(mean_pos, label_b, false_b, examples, labels)
@@ -253,11 +266,14 @@ def monitore_communities(data_path, params, num_repetitions=20):
         r = min(1-1e-3, r) # crop
         weight = r # / (1 - r) # similarity score
         edges.append((label_a, label_b, weight))
-        print(label_a, label_b, weight)
+        desc = ' '.join([str(label_a), str(label_b), str(weight)])
+        progress.set_description(desc=desc)
+        progress.update()
+    progress.close()
     print_big_graph(params, mean_pos, edges)
 
 def monitore_regression(data_path, params, num_repetitions=20):
-    all_pairs = get_all_pairs_datasets(data_path, params.n_way, params.crop)
+    all_pairs = get_all_pairs_datasets(data_path, params.n_way, params.crop, params.parts)
     edges = []
     mean_pos = dict()
     for (examples, labels, label_a, label_b, false_a, false_b) in all_pairs:
@@ -453,21 +469,29 @@ def thikonov_communities(params, train_set, train_labels, test_set, test_labels,
     predicted = get_examples_predicted(colors, predicted_communities)
     return get_acc(predicted, logits_communities, labels.numpy(), n_shot, n_val, loss)
 
-def monitore_arena(data_path, params, num_repetitions=50):
+def monitore_arena(data_path, params, num_repetitions=10):
     path = os.path.join('graphs', params.dot_name)
     dot_graph = nx.drawing.nx_agraph.read_dot(path)
     edges = [(int(str_edge[0]), int(str_edge[1]), float(str_edge[2])) for str_edge in dot_graph.edges.data('weight')]
+    edges.sort(key=lambda t: t[2])
+    edges = edges[:len(edges)//8]
     big_graph = nx.Graph()
     big_graph.add_weighted_edges_from(edges)
+    bipartite = 64 if '&' in params.dataset else None
     if params.plot:
-        pos = nx.spring_layout(big_graph)
-        options, edge_labels = get_draw_options(big_graph)
-        nx.draw(big_graph, pos=pos, **options)
+        if bipartite:
+            part_1 = [node for node in big_graph if node < bipartite]
+            pos = nx.drawing.layout.bipartite_layout(big_graph, part_1, align='horizontal')
+        else:
+            pos = nx.spring_layout(big_graph)
+        options, edge_labels = get_draw_options(big_graph, bipartite)
+        nx.draw_networkx_nodes(big_graph, pos=pos, **options)
+        nx.draw_networkx_edges(big_graph, pos=pos, **options)
+        nx.draw_networkx_labels(big_graph, pos, labels={node:str(node) for node in big_graph})
         nx.draw_networkx_edge_labels(big_graph, edge_labels=edge_labels, pos=pos, font_size=8)
         plt.show()
     weights = []
     accs = []
-    errors = []
     if params.worse_only:
         clusters = get_worse_clusters(params, big_graph, data_path)
     progress = tqdm(total=num_repetitions, leave=True)
@@ -482,20 +506,13 @@ def monitore_arena(data_path, params, num_repetitions=50):
                                                       test_set, test_labels,
                                                       params.n_way, 'logistic_regression',
                                                       params.origin_normalization, params)
-        _, _, error = features_classification(train_set, train_labels,
-                                              test_set, test_labels,
-                                              params.n_way, params.classifier,
-                                              params.origin_normalization, params, loss=True)
         accs.append(100. - test_acc)  # error rate
-        errors.append(error)
         desc = ' '.join([str(train_acc), str(ways), str(edges_weights), str(test_acc)])
         progress.set_description(desc=desc)
         progress.update()
     progress.close()
     print('mean weight=', np.mean(weights))
     print('mean_acc=', 100-np.mean(accs))
-    print('mean errors=', np.mean(errors))
-    for ref_measure, ref_name in zip([errors, weights], ['errors', 'weights']):
-        for func, func_name in zip([spearmanr, np.corrcoef], ['spearmanr', 'corrcoef']):
-            corrcoefmatrix = func(ref_measure, accs)
-            print(ref_name, ' ', func_name, ' => ', corrcoefmatrix)
+    for func, func_name in zip([spearmanr, np.corrcoef], ['spearmanr', 'corrcoef']):
+        corrcoefmatrix = func(weights, accs)
+        print('weights', ' ', func_name, ' => ', corrcoefmatrix)

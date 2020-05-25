@@ -1,8 +1,9 @@
 import argparse
 from utils import GridSearch
 
-def get_grid_search_params(training_type, mode, yuqing_version, classifier, n_way, n_val, n_shot):
+def get_grid_search_params(training_type, mode, yuqing_version, classifier, n_way, n_val, n_shot, dataset):
     grid = GridSearch()
+    grid.add_range('dataset', [dataset])
     grid.add_range('training_type', [training_type])
     grid.add_range('mode', [mode])
     grid.add_range('n_way', [n_way])
@@ -45,10 +46,11 @@ def get_grid_search_params(training_type, mode, yuqing_version, classifier, n_wa
         # grid.add_range('intersection_measure', ['baseline'])
         grid.add_range('intersection_measure', ['arena'])
         grid.add_range('communities', ['entropy'])  # 'pure'
-        grid.add_range('worse_only', [False])
+        grid.add_range('worse_only', [True])
+        grid.add_range('parts', [64])
         grid.add_range('crop', [False])  # 'pure'
         grid.add_range('ladder', [-1])  # 'pure'
-        grid.add_range('dot_name', ['wideresnet/louvain_dendrogram_communities_1_20.dot'])
+        grid.add_range('dot_name', ['wideresnet/base_novel/louvain_dendrogram_communities_1_20.dot'])
     grid.add_range('origin_normalization', ['mean-l2'])
     if 'orthonormal' in mode:
         grid.add_range('latent_normalization', ['l2'])
@@ -60,7 +62,7 @@ def get_grid_search_params(training_type, mode, yuqing_version, classifier, n_wa
         grid.add_range('latent_normalization', ['l2'])
     grid.add_range('classifier', [classifier])  # ['logistic_regression', 'ncm']
     grid.add_range('compute_corr', [True])
-    grid.add_range('plot', [False])
+    grid.add_range('plot', [True])
     grid.add_range('progressive_plot', [False])
     return grid
 

@@ -149,6 +149,8 @@ def features_classification(train_set, train_labels, test_set, test_labels, n_wa
         classifier.eval()
         train_accuracy = evaluate_logistic_regression(classifier, train_set, train_labels, device)
         test_accuracy = evaluate_logistic_regression(classifier, test_set, test_labels, device)
+        if loss:
+            train_accuracy, test_accuracy, loss
         return train_accuracy, test_accuracy
     elif classifier == 'ncm':
         accs = nearest_centroid_classifier(train_set, train_labels, test_set, test_labels, metric='cosine')
