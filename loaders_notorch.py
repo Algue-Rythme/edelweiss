@@ -1,11 +1,10 @@
 import functools
 import pickle
-import torch
 import numpy as np
 
 
 def get_labels_stats(labels):
-    labels_set = torch.unique(labels).numpy().tolist()
+    labels_set = list(set(labels.tolist()))
     num_labels = len(labels_set)
     n_sample_per_label = labels.shape[0] // num_labels
     return num_labels, n_sample_per_label
@@ -20,9 +19,9 @@ def data_subset(data, labels, n_way, ways=None):
     for new_l, l in enumerate(ways):
         start_sample, end_sample = l*n_sample_per_label, (l+1)*n_sample_per_label
         subset_data.append(data[start_sample : end_sample])
-        subset_labels.append(torch.LongTensor([new_l]*n_sample_per_label))
-    subset_data = torch.cat(subset_data, dim=0)
-    subset_labels = torch.cat(subset_labels, dim=0)
+        subset_labels.append(np.array([new_l]*n_sample_per_label, dtype=np.int64))
+    subset_data = np.concatenate(subset_data, axis=0)
+    subset_labels = np.concatenate(subset_labels, axis=0)
     return subset_data, subset_labels
 
 def extract_from_slice(cur_data_slice, select_train, select_test, train_set, test_set):
@@ -44,10 +43,10 @@ def split_train_test(data, labels, n_shot, n_val):
         end_sample = start_sample + n_sample_per_label
         extract_from_slice(data[start_sample:end_sample], select_train, select_test, train_set, test_set)
         extract_from_slice(labels[start_sample:end_sample], select_train, select_test, train_labels, test_labels)
-    train_set = torch.cat(train_set, dim=0)
-    test_set = torch.cat(test_set, dim=0)
-    train_labels = torch.cat(train_labels, dim=0)
-    test_labels = torch.cat(test_labels, dim=0)
+    train_set = np.concatenate(train_set, axis=0)
+    test_set = np.concatenate(test_set, axis=0)
+    train_labels = np.concatenate(train_labels, axis=0)
+    test_labels = np.concatenate(test_labels, axis=0)
     return train_set, train_labels, test_set, test_labels
 
 def load_pickle(file):
@@ -56,8 +55,8 @@ def load_pickle(file):
         labels = [np.full(shape=len(data[key]), fill_value=key) for key in data]
         data = [features for key in data for features in data[key]]
         dataset = dict()
-        dataset['data'] = torch.FloatTensor(np.stack(data, axis=0))
-        dataset['labels'] = torch.LongTensor(np.concatenate(labels))
+        dataset['data'] = np.stack(data, axis=0)
+        dataset['labels'] = np.concatenate(labels)
         return dataset
 
 @functools.lru_cache()
@@ -68,23 +67,12 @@ def get_dataset_from_datapath(data_path):
     for path in paths:
         if data_path.endswith('.plk') or data_path.endswith('.pkl'):
             dataset = load_pickle(path)
-        elif data_path.endswith('.pt'):
-            dataset = torch.load(path)
         else:
             assert False
         original_data.append(dataset['data'])
-        cur_num_labels = len(set(dataset['labels'].numpy().tolist()))
-        if cur_num_labels == 64:
-            delta = 0
-        elif cur_num_labels == 16:
-            delta += 64
-        elif cur_num_labels == 20:
-            delta += 16+64
-        else:
-            raise ValueError
-        original_labels.append(delta+dataset['labels'])
-    original_data = torch.cat(original_data)
-    original_labels = torch.cat(original_labels)
+        original_labels.append(dataset['labels'])
+    original_data = np.concatenate(original_data)
+    original_labels = np.concatenate(original_labels)
     return original_data, original_labels
 
 def get_train_test_datasets(data_path, n_way, n_shot, n_val):

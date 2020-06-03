@@ -207,7 +207,7 @@ def get_draw_options(big_graph, bipartite):
         "with_labels": True,
     }, edge_labels
 
-def print_big_graph(params, mean_pos, edges, avg_degree=3, tsne_pos=False):
+def print_big_graph(params, mean_pos, edges, avg_degree=20, tsne_pos=False):
     bipartite = 64 if '&' in params.dataset else None
     edges.sort(key=lambda t: t[2], reverse=True)
     max_edges = int(len(mean_pos) * avg_degree)
@@ -246,7 +246,8 @@ def add_class(mean_pos, label, false_label, examples, labels):
     mean_pos[label] = torch.mean(class_examples, dim=0, keepdim=True).numpy()
 
 def monitore_communities(data_path, params, num_repetitions=5):
-    all_pairs = get_all_pairs_datasets(data_path, params.n_way, params.crop, params.parts)
+    parts = params.parts if '&' in params.dataset else None
+    all_pairs = get_all_pairs_datasets(data_path, params.n_way, params.crop, parts)
     edges = []
     mean_pos = dict()
     total_pairs = next(all_pairs)
@@ -469,12 +470,20 @@ def thikonov_communities(params, train_set, train_labels, test_set, test_labels,
     predicted = get_examples_predicted(colors, predicted_communities)
     return get_acc(predicted, logits_communities, labels.numpy(), n_shot, n_val, loss)
 
-def monitore_arena(data_path, params, num_repetitions=10):
+def node_label(node):
+    if node < 64:
+        return node
+    if node < 80:
+        return node - 64
+    return node-64-16
+
+def monitore_arena(data_path, params, num_repetitions=200):
     path = os.path.join('graphs', params.dot_name)
     dot_graph = nx.drawing.nx_agraph.read_dot(path)
     edges = [(int(str_edge[0]), int(str_edge[1]), float(str_edge[2])) for str_edge in dot_graph.edges.data('weight')]
-    edges.sort(key=lambda t: t[2])
-    edges = edges[:len(edges)//8]
+    edges.sort(key=lambda t: t[2], reverse=True)
+    max_edges = len(edges)//10
+    edges = edges[:max_edges]
     big_graph = nx.Graph()
     big_graph.add_weighted_edges_from(edges)
     bipartite = 64 if '&' in params.dataset else None
@@ -487,8 +496,8 @@ def monitore_arena(data_path, params, num_repetitions=10):
         options, edge_labels = get_draw_options(big_graph, bipartite)
         nx.draw_networkx_nodes(big_graph, pos=pos, **options)
         nx.draw_networkx_edges(big_graph, pos=pos, **options)
-        nx.draw_networkx_labels(big_graph, pos, labels={node:str(node) for node in big_graph})
-        nx.draw_networkx_edge_labels(big_graph, edge_labels=edge_labels, pos=pos, font_size=8)
+        nx.draw_networkx_labels(big_graph, pos, labels={node:str(node_label(node)) for node in big_graph})
+        # nx.draw_networkx_edge_labels(big_graph, edge_labels=edge_labels, pos=pos, font_size=8)
         plt.show()
     weights = []
     accs = []

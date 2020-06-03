@@ -1,7 +1,7 @@
 import argparse
 from utils import GridSearch
 
-def get_grid_search_params(training_type, mode, yuqing_version, classifier, n_way, n_val, n_shot, dataset):
+def get_grid_search_params(training_type, mode, yuqing_version, classifier, n_way, n_val, n_shot, dataset, dot_name, arena):
     grid = GridSearch()
     grid.add_range('dataset', [dataset])
     grid.add_range('training_type', [training_type])
@@ -39,18 +39,20 @@ def get_grid_search_params(training_type, mode, yuqing_version, classifier, n_wa
         grid.add_range('higher_order', [False])
         grid.add_range('kappa', [2]) # [1, 2, 3]
         grid.add_range('alpha', [0.75])  # [1.25]
+        if arena:
+            grid.add_range('intersection_measure', ['arena'])
+        else:
+            grid.add_range('intersection_measure', ['louvain_dendrogram'])
         # grid.add_range('intersection_measure', ['minimum_cut'])
         # grid.add_range('intersection_measure', ['stoer_wagner'])
-        # grid.add_range('intersection_measure', ['kernighan']) 
-        # grid.add_range('intersection_measure', ['louvain_dendrogram'])
+        # grid.add_range('intersection_measure', ['kernighan'])
         # grid.add_range('intersection_measure', ['baseline'])
-        grid.add_range('intersection_measure', ['arena'])
         grid.add_range('communities', ['entropy'])  # 'pure'
-        grid.add_range('worse_only', [True])
+        grid.add_range('worse_only', [False])
         grid.add_range('parts', [64])
         grid.add_range('crop', [False])  # 'pure'
         grid.add_range('ladder', [-1])  # 'pure'
-        grid.add_range('dot_name', ['wideresnet/base_novel/louvain_dendrogram_communities_1_20.dot'])
+        grid.add_range('dot_name', [dot_name])
     grid.add_range('origin_normalization', ['mean-l2'])
     if 'orthonormal' in mode:
         grid.add_range('latent_normalization', ['l2'])
@@ -75,6 +77,8 @@ def parse_args(modes):
     parser.add_argument('--n_way', default=2, type=int, help='number of classes.')
     parser.add_argument('--n_val', default=15, type=int, help='number of validation examples.')
     parser.add_argument('--n_shot', default=5, type=int, help='number of training examples.')
+    parser.add_argument('--dot_name', default='wideresnet-novel/novel/louvain_dendrogram_communities_1_20.dot')
+    parser.add_argument('--arena', action='store_true')
     sanity_check_parser = parser.add_mutually_exclusive_group(required=True)
     sanity_check_parser.add_argument('--sanity_check', dest='training_type', action='store_const', const='sanity_check')
     sanity_check_parser.add_argument('--brief_overview', dest='training_type', action='store_const', const='brief_overview')
