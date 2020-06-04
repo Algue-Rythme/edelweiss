@@ -36,6 +36,7 @@ def TDA_monitoring(params, x_latent):
     return diag_entropies(diags[0], mode='vector')
 
 def print_densities(accs, instance_scores):
+    import gudhi
     persistent = np.array([t for i, instance in enumerate(instance_scores) if accs[i] >= 90. for t in instance])
     gudhi.plot_persistence_density(persistent)
     plt.show()
@@ -275,10 +276,10 @@ def cherry_pick(params, x_latent, labels):
     start_centroids = initialization(params, x_latent, labels)
     probs, centroids, node_score = mean_shift(params, x_latent, start_centroids, current_labels)
     acc = evaluate_acc(probs, labels)
-    node_score = get_entropy(x_latent, centroids)
-    node_score = reverse_node_score(node_score, probs, labels)
-    instances_score = compute_instances_score(probs, centroids, node_score)
-    return acc, node_score, instances_score
+    # node_score = get_entropy(x_latent, centroids)
+    # node_score = reverse_node_score(node_score, probs, labels)
+    # instances_score = compute_instances_score(probs, centroids, node_score)
+    return acc, None, None
 
 ######################################
 ############### Options ##############
@@ -366,7 +367,7 @@ def print_correlation(name, accs, metric):
     corrmatrix, p = pearsonr(accs, metric)
     print(name, 'c=%.3f'%corrmatrix, 'p=%.3f'%p)
 
-def parse_args():
+def parse_args(from_command_line=True):
     parser = argparse.ArgumentParser(description='Graph Mean Shift.')
     parser.add_argument('--data_path', default='yuqing', type=str, help='backbone.')
     parser.add_argument('--n_way', default=5, type=int, help='number of classes.')
@@ -392,8 +393,11 @@ def parse_args():
     parser.add_argument('--plot', action='store_true')
     parser.add_argument('--progressive', action='store_true')
     parser.add_argument('--max_dimension', default=2, type=int)
-    return parser.parse_args()
-
+    if from_command_line:
+        return parser.parse_args()
+    else:
+        return parser.parse_args([])
+        
 def get_grid_search(args):
     dict_grid = {arg_name:[arg_value] for arg_name, arg_value in vars(args).items()}
     grid = ParameterGrid([dict_grid])

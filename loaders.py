@@ -74,7 +74,7 @@ def get_dataset_from_datapath(data_path):
             assert False
         original_data.append(dataset['data'])
         cur_num_labels = len(set(dataset['labels'].numpy().tolist()))
-        if cur_num_labels == 64:
+        if len(paths) == 1 or cur_num_labels == 64:
             delta = 0
         elif cur_num_labels == 16:
             delta += 64

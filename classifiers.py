@@ -1,3 +1,4 @@
+import collections
 from math import ceil
 import torch
 import torch.nn as nn
@@ -6,6 +7,7 @@ import pygsp
 from tqdm import tqdm
 from utils import get_device
 import scipy
+from cherry_picking import cherry_pick, parse_args
 
 
 class logistic_regression(nn.Module):
@@ -140,6 +142,12 @@ def tikhonov_label_propagation(train_set, train_labels, test_set, test_labels, p
     prediction = np.argmax(logits, axis=1)
     return monitoring.get_acc(prediction, logits, labels, n_shot, n_val, loss)
 
+def get_default_cherry_params():
+    args = parse_args(from_command_line=False)
+    dict_grid = dict(vars(args))
+    Parameter = collections.namedtuple('Parameter', ' '.join(sorted(dict_grid.keys())))
+    return Parameter(**dict_grid)
+
 def features_classification(train_set, train_labels, test_set, test_labels, n_way, classifier, normalize, params, loss=False):
     if classifier == 'logistic_regression':
         train_set, test_set = normalize_train_test(train_set, test_set, normalize)
@@ -166,5 +174,13 @@ def features_classification(train_set, train_labels, test_set, test_labels, n_wa
         import monitoring
         accs = monitoring.thikonov_communities(params, train_set, train_labels, test_set, test_labels, loss)
         return accs
+    elif classifier == 'cherry_picking':
+        if not hasattr(features_classification, 'cherry_params'):
+            features_classification.cherry_params = get_default_cherry_params()
+            print(features_classification.cherry_params)
+        x_latent = np.concatenate([train_set, test_set])
+        labels = np.concatenate([train_labels, test_labels])
+        acc, _, _ = cherry_pick(features_classification.cherry_params, x_latent, labels)
+        return 100., acc
     else:
         assert False

@@ -477,12 +477,27 @@ def node_label(node):
         return node - 64
     return node-64-16
 
-def monitore_arena(data_path, params, num_repetitions=200):
+def init_plot():
+    plt.ion()
+    fig, ax = plt.subplots()
+    plt.xlim(0, 5)
+    plt.ylim(0, 50)
+    sc = ax.scatter([], [], marker='.')
+    fig.canvas.draw_idle()
+    plt.pause(0.1)
+    return fig, sc
+
+def add_point(fig, sc, metric, accs):
+    sc.set_offsets(np.c_[np.array(metric), np.array(accs)])
+    fig.canvas.draw_idle()
+    plt.pause(0.05)
+
+def monitore_arena(data_path, params, num_repetitions=1000):
     path = os.path.join('graphs', params.dot_name)
     dot_graph = nx.drawing.nx_agraph.read_dot(path)
     edges = [(int(str_edge[0]), int(str_edge[1]), float(str_edge[2])) for str_edge in dot_graph.edges.data('weight')]
     edges.sort(key=lambda t: t[2], reverse=True)
-    max_edges = len(edges)//10
+    max_edges = len(edges)//1
     edges = edges[:max_edges]
     big_graph = nx.Graph()
     big_graph.add_weighted_edges_from(edges)
@@ -504,6 +519,7 @@ def monitore_arena(data_path, params, num_repetitions=200):
     if params.worse_only:
         clusters = get_worse_clusters(params, big_graph, data_path)
     progress = tqdm(total=num_repetitions, leave=True)
+    fig, scs = init_plot()
     for repet in range(num_repetitions):
         ways = clusters[repet][1] if params.worse_only else None
         train_test, ways = get_train_test_datasets_labels(data_path, params.n_way, params.n_shot, params.n_val, ways=ways)
@@ -515,11 +531,17 @@ def monitore_arena(data_path, params, num_repetitions=200):
                                                       test_set, test_labels,
                                                       params.n_way, 'logistic_regression',
                                                       params.origin_normalization, params)
-        accs.append(100. - test_acc)  # error rate
+        error_rate = 100. - test_acc
+        accs.append(error_rate)  # error rate
+        add_point(fig, scs, weights, accs)
         desc = ' '.join([str(train_acc), str(ways), str(edges_weights), str(test_acc)])
         progress.set_description(desc=desc)
         progress.update()
     progress.close()
+    fig.canvas.draw_idle()
+    fig.savefig(os.path.join('graphs', 'correlation.png'))
+    plt.pause(10)
+    # plt.close(fig)
     print('mean weight=', np.mean(weights))
     print('mean_acc=', 100-np.mean(accs))
     for func, func_name in zip([spearmanr, np.corrcoef], ['spearmanr', 'corrcoef']):
