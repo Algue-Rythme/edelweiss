@@ -64,7 +64,7 @@ def get_grid_search_params(training_type, mode, yuqing_version, classifier, n_wa
         grid.add_range('latent_normalization', ['l2'])
     grid.add_range('classifier', [classifier])  # ['logistic_regression', 'ncm']
     grid.add_range('compute_corr', [True])
-    grid.add_range('plot', [False])
+    grid.add_range('plot', [True])
     grid.add_range('progressive_plot', [False])
     return grid
 

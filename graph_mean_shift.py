@@ -18,16 +18,13 @@ def parse_args():
     parser.add_argument('--n_shot', default=5, type=int, help='number of training examples.')
     parser.add_argument('--num_tests', default=100, type=int, help='number of tests.')
     parser.add_argument('--avg_degree', default=20, type=int, help='number of neighbors.')
-    parser.add_argument('--sim_measure', default='euclidian', type=str, help='measure of similarity.')
+    parser.add_argument('--sim_measure', default='cosine', type=str, help='measure of similarity.')
     return parser.parse_args()
 
 def get_grid_search(args):
     grid = GridSearch()
     for arg_name, arg_value in vars(args).items():
         grid.add_range(arg_name, [arg_value])
-    # Preprocessing
-    grid.add_range('mean', [True])
-    grid.add_range('norm', [True])
     # Algorithm
     grid.add_range('momentum', [0., 0.9, 0.95, 0.99])
     grid.add_range('stop_criterion', ['fixpoint'])
@@ -78,9 +75,15 @@ def similarity_measure(params, x_latent):  # return positive edges only
 ######################################
 
 def preprocessing(params, x_latent):
-    if params.mean:
+    if not params.denormalize_square:
+        x_latent = x_latent ** 0.5
+    if not params.denormalize_norm:
+        norm = np.linalg.norm(x_latent, axis=1, keepdims=True)
+        epsilon = 1e-3
+        x_latent = x_latent / np.maximum(norm, epsilon)
+    if not params.denormalize_mean:
         x_latent = x_latent - np.mean(x_latent, axis=0, keepdims=True)
-    if params.norm:
+    if not params.denormalize_norm:
         norm = np.linalg.norm(x_latent, axis=1, keepdims=True)
         epsilon = 1e-3
         x_latent = x_latent / np.maximum(norm, epsilon)
@@ -339,7 +342,10 @@ def get_data(params):
     data_paths = {'vanilla':'images/latent/miniImagenet/ResNet/layer5/features.pt',
                   'yuqing':'images/latent/miniImagenet/WideResNet28_10_S2M2_R/last/novel.plk',
                   'cross':'images/latent/cross/WideResNet28_10_S2M2_R/last/output.plk',
-                  'default_edge':'../Potion/images/miniImagenet/WideResNet28_10/default/400/novel.plk'}
+                  'myriam-densenet-test':'images/latent/miniImagenet/DenseNet/test.pkl',
+                  'myriam-wideresnet-test':'images/latent/miniImagenet/WideResNet-28-10/test.pkl',
+                  'myriam-densenet-base':'images/latent/miniImagenet/DenseNet/train.pkl',
+                  'myriam-wideresnet-base':'images/latent/miniImagenet/WideResNet-28-10/train.pkl'}
     n_way, n_shot, n_val = params.n_way, params.n_shot, params.n_val
     train_test = get_train_test_datasets(data_paths[params.data_path], n_way, n_shot, n_val)
     train_set, train_labels, test_set, test_labels = train_test

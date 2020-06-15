@@ -497,8 +497,9 @@ def monitore_arena(data_path, params, num_repetitions=1000):
     dot_graph = nx.drawing.nx_agraph.read_dot(path)
     edges = [(int(str_edge[0]), int(str_edge[1]), float(str_edge[2])) for str_edge in dot_graph.edges.data('weight')]
     edges.sort(key=lambda t: t[2], reverse=True)
-    max_edges = len(edges)//1
+    max_edges = len(edges)//6
     edges = edges[:max_edges]
+    print(edges)
     big_graph = nx.Graph()
     big_graph.add_weighted_edges_from(edges)
     bipartite = 64 if '&' in params.dataset else None

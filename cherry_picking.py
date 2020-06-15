@@ -276,10 +276,10 @@ def cherry_pick(params, x_latent, labels):
     start_centroids = initialization(params, x_latent, labels)
     probs, centroids, node_score = mean_shift(params, x_latent, start_centroids, current_labels)
     acc = evaluate_acc(probs, labels)
-    # node_score = get_entropy(x_latent, centroids)
-    # node_score = reverse_node_score(node_score, probs, labels)
-    # instances_score = compute_instances_score(probs, centroids, node_score)
-    return acc, None, None
+    node_score = get_entropy(x_latent, centroids)
+    node_score = reverse_node_score(node_score, probs, labels)
+    instances_score = compute_instances_score(probs, centroids, node_score)
+    return acc, node_score, instances_score
 
 ######################################
 ############### Options ##############
@@ -288,12 +288,17 @@ def cherry_pick(params, x_latent, labels):
 def get_data(params):
     data_paths = {'vanilla':'images/latent/miniImagenet/ResNet/layer5/features.pt',
                   'yuqing':'images/latent/miniImagenet/WideResNet28_10_S2M2_R/last/novel.plk',
-                  'cross':'images/latent/cross/WideResNet28_10_S2M2_R/last/output.plk'}
+                  'cross':'images/latent/cross/WideResNet28_10_S2M2_R/last/output.plk',
+                  'myriam-densenet-test':'images/latent/miniImagenet/DenseNet/test.pkl',
+                  'myriam-wideresnet-test':'images/latent/miniImagenet/WideResNet-28-10/test.pkl',
+                  'myriam-densenet-base':'images/latent/miniImagenet/DenseNet/train.pkl',
+                  'myriam-wideresnet-base':'images/latent/miniImagenet/WideResNet-28-10/train.pkl'}
     n_way, n_shot, n_val = params.n_way, params.n_shot, params.n_val
     train_test = get_train_test_datasets(data_paths[params.data_path], n_way, n_shot, n_val)
     train_set, train_labels, test_set, test_labels = train_test
     x_latent = np.concatenate([train_set, test_set])
     labels = np.concatenate([train_labels, test_labels])
+    print('Shape of input: ', x_latent.shape)
     return x_latent, labels
 
 def update_desc(metric, vals, val, as_is=False, averaged=False, percentage=False):
@@ -360,7 +365,7 @@ def compute_stats(params):
     print('')
     print(np.mean(node_scores, axis=0))
     print('')
-    # print_correlation('instances', accs, instance_scores)
+    print_correlation('instances', accs, instance_scores)
 
 
 def print_correlation(name, accs, metric):
@@ -386,7 +391,7 @@ def parse_args(from_command_line=True):
     parser.add_argument('--uncautious', action='store_true')
     parser.add_argument('--unbalanced', action='store_true')
     parser.add_argument('--matching', action='store_true')
-    parser.add_argument('--momentum', default=1., type=float)
+    parser.add_argument('--momentum', default=0.8, type=float)
     parser.add_argument('--sim_momentum', action='store_true')
     parser.add_argument('--no_progress', action='store_true')
     parser.add_argument('--karsher_centroids', action='store_true')
